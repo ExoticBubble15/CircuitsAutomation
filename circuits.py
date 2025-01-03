@@ -138,7 +138,7 @@ def fillIn(node):
                 float(i)
             except:
                 corrected = correct(i)
-                if correct != '':
+                if corrected != '' and corrected not in validWords:
                     validWords.append(corrected)
         print(f'word list: {validWords} ({len(validWords)})')
         return validWords
@@ -172,7 +172,7 @@ def fillIn(node):
                 suspendedNodes.clear()
                 return True
             else:
-                print(f'FAIL with {word} ({wordList.index(word)+1}/{NUMGUESSES})')
+                print(f'FAIL with {word} ({wordList.index(word)+1}/{len(wordList)})')
         moveToClick(cellSelect)
         useBolt()
         print("suspending node...")
