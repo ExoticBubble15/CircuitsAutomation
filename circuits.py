@@ -14,9 +14,9 @@ VALID = "1234567890qwertyuiopasdfghjklzxcvbnm"
 def correct(str):
     str = str.lower()
     ret = ""
-    for i in range(len(str)):
-        if VALID.find(str[i]) != -1:
-            ret += str[i]
+    for i in str:
+        if VALID.find(i) != -1:
+            ret += i
     return ret
 
 #node class for representing cells
@@ -25,7 +25,7 @@ class Node:
         self.text = text
         self.pos = (row, col)
         self.top, self.bot, self.left, self.right = None, None, None, None
-    
+
     def getRow(self):
         return self.pos[0]
     
@@ -78,6 +78,7 @@ wordGraph = [[None, None, None, None],
              [None, None, None, None]]
 #chatGPT api
 client = OpenAI(api_key = os.environ.get("API_KEY"))
+NUMGUESSES = 15
 
 #white = contains = within range
 #black = outside of range
@@ -121,7 +122,7 @@ def fillIn(node):
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a puzzle-solving bot. Your task is to solve word puzzles by filling blanks with a single word that creates valid, commonly recognized phrases or compound words. Respond with a list of 10 possible 1-word answers, ordered from most to least likely, using only necessary alphanumerics."
+                    "content": f"You are a puzzle-solving bot. Your task is to solve word puzzles by filling blanks with a single word that creates valid, commonly recognized phrases or compound words. Respond with a list of {NUMGUESSES} possible 1-word answers, ordered from most to least likely, using only necessary alphanumerics."
                 },
                 {
                     "role": "user",
@@ -139,7 +140,7 @@ def fillIn(node):
                 corrected = correct(i)
                 if correct != '':
                     validWords.append(corrected)
-        print(f'word list: {validWords}')
+        print(f'word list: {validWords} ({len(validWords)})')
         return validWords
 
     def moveToClick(pos):
@@ -147,13 +148,13 @@ def fillIn(node):
         pyautogui.click()
 
     def useBolt():
-        raise KeyError("bolt used!")
-        moveToClick(useBoltButton)
-        updatedCell = ImageGrab.grab(bbox=(boxXCoords[0], boxYCoords[0], boxXCoords[1], boxYCoords[1]))
-        updatedCell = np.array(updatedCell)
-        starting = (correct(pytesseract.image_to_string(updatedCell)))
-        print(f'bolt used: {starting}')
-        return starting
+        suspendedNodes.append(node)
+        # moveToClick(useBoltButton)
+        # updatedCell = ImageGrab.grab(bbox=(boxXCoords[0], boxYCoords[0], boxXCoords[1], boxYCoords[1]))
+        # updatedCell = np.array(updatedCell)
+        # starting = (correct(pytesseract.image_to_string(updatedCell)))
+        # print(f'bolt used: {starting}')
+        # return starting
 
     def solveAttempt(wordList):
         for word in wordList:
@@ -168,13 +169,17 @@ def fillIn(node):
             if len(np.where(img==[255])[0]) != 0:
                 print(f'SUCCESS with {word}')
                 node.text = word
-                return
+                suspendedNodes.clear()
+                return True
             else:
-                print(f'FAIL with {word}')
+                print(f'FAIL with {word} ({wordList.index(word)+1}/{NUMGUESSES})')
         moveToClick(cellSelect)
-        solveAttempt(getWordList(getCompletePrompt(initialPrompt, wordList, useBolt())))
+        useBolt()
+        print("suspending node...")
+        return False
+        # solveAttempt(getWordList(getCompletePrompt(initialPrompt, wordList, useBolt())))
 
-    solveAttempt(getWordList(getCompletePrompt(initialPrompt, [], "")))
+    return solveAttempt(getWordList(getCompletePrompt(initialPrompt, [], "")))
 
 BOXCOORDS = [1920/2-315, 1080/2-15, 1920/2+315, 1080/2+325]
 YADJ = 20   #adjusting cell view area so ocr works
@@ -232,6 +237,7 @@ for xCount in range(4):
             print(f'nothing at xCount:{xCount}, yCount:{yCount}')
         # cv2.waitKey(0)
 
+suspendedNodes = []
 print("\nSOLVING PUZZLE")
 while (numInputs > 0):
     nextTarget = Node("~", None, None) #dummy comparison node
@@ -239,11 +245,13 @@ while (numInputs > 0):
         for col in range(len(wordGraph[row])):
             node = wordGraph[row][col]
             try:
-                if node.text == '~' and node.getNumNeighbors() > nextTarget.getNumNeighbors():
+                if node.text == '~' and node.getNumNeighbors() > nextTarget.getNumNeighbors() and node not in suspendedNodes:
                     nextTarget = node
             except:
                 continue
-    #api shit
-    print(f'\ntarget: {nextTarget}')
-    fillIn(nextTarget)
-    numInputs -= 1
+    
+    print(f'\n{numInputs} remaining')
+    print(f'target: {nextTarget} at {nextTarget.pos}')
+    print(f'suspended: {[i.pos for i in suspendedNodes]}')
+    if fillIn(nextTarget):
+        numInputs -= 1
