@@ -6,7 +6,7 @@ import pytesseract
 import pyautogui
 from openai import OpenAI
 import os
-import time
+import pyperclip
 
 #for correcting ocr readings
 #keeps only alphanumerics
@@ -25,6 +25,7 @@ class Node:
         self.text = text
         self.pos = (row, col)
         self.top, self.bot, self.left, self.right = None, None, None, None
+        self.beginsWith = ""
 
     def getRow(self):
         return self.pos[0]
@@ -78,6 +79,8 @@ wordGraph = [[None, None, None, None],
              [None, None, None, None]]
 #chatGPT api
 client = OpenAI(api_key = os.environ.get("API_KEY"))
+# MODEL = "gpt-4o-mini"
+MODEL = "gpt-4o"
 NUMGUESSES = 15
 
 #white = contains = within range
@@ -106,19 +109,18 @@ def fillIn(node):
     boxYCoords = (BOXCOORDS[1]+node.getCol()*YSEGMENT+YADJ, BOXCOORDS[1]+(node.getCol()+1)*YSEGMENT-YADJ)
     cellSelect = (sum(boxXCoords)/2, sum(boxYCoords)/2)
 
-    def getCompletePrompt(initial, avoidWords, beginsWith):
+    def getCompletePrompt(initial, avoidWords):
         prompt = initial
         if len(avoidWords) > 0:
             prompt += (f'. avoid {", ".join(f"'{word}'" for word in avoidWords)}')
-        if len(beginsWith) > 0:
-            prompt += (f". begins with '{beginsWith}'")
+        if len(node.beginsWith) > 0:
+            prompt += (f". begins with '{node.beginsWith}'")
         print(f'prompt: {prompt}')
         return prompt
 
     def getWordList(prompt):
         completion = client.chat.completions.create(
-            # model="gpt-4o-mini",
-            model = "gpt-4o",
+            model = MODEL,
             messages=[
                 {
                     "role": "system",
@@ -148,38 +150,50 @@ def fillIn(node):
         pyautogui.click()
 
     def useBolt():
-        suspendedNodes.append(node)
-        # moveToClick(useBoltButton)
-        # updatedCell = ImageGrab.grab(bbox=(boxXCoords[0], boxYCoords[0], boxXCoords[1], boxYCoords[1]))
-        # updatedCell = np.array(updatedCell)
-        # starting = (correct(pytesseract.image_to_string(updatedCell)))
-        # print(f'bolt used: {starting}')
-        # return starting
+        def hotkey(keyList):
+            for i in keyList:
+                pyautogui.keyDown(i)
+            for i in keyList:
+                pyautogui.keyUp(i)
+
+        moveToClick(cellSelect)
+        moveToClick(useBoltButton)
+        moveToClick(cellSelect)
+        #weird error where ocr isnt reading letters, so gotta use a jank workaround
+        hotkey(['ctrl', 'a', 'ctrl', 'c'])
+        pyautogui.press('right')
+        global numBolts
+        numBolts -= 1
+        return (correct(pyperclip.paste()))
 
     def solveAttempt(wordList):
         for word in wordList:
             moveToClick(cellSelect)
-            pyautogui.write(word)
+            pyautogui.press('right', presses=len(node.beginsWith))
+            pyautogui.write(word[len(node.beginsWith):])
             pyautogui.press('enter')
-            time.sleep(0.1)
 
             img = ImageGrab.grab(bbox=(boxXCoords[0], boxYCoords[0], boxXCoords[1], boxYCoords[1]))
             img = np.array(img)
             img = colorFilter(img, [226,212,4], 10)
             if len(np.where(img==[255])[0]) != 0:
-                print(f'SUCCESS with {word}')
+                print(f'SUCCESS with {word} ({wordList.index(word)+1}/{len(wordList)})')
                 node.text = word
                 suspendedNodes.clear()
                 return True
             else:
                 print(f'FAIL with {word} ({wordList.index(word)+1}/{len(wordList)})')
-        moveToClick(cellSelect)
-        useBolt()
-        print("suspending node...")
-        return False
-        # solveAttempt(getWordList(getCompletePrompt(initialPrompt, wordList, useBolt())))
+        if node in suspendedNodes:
+            if numBolts > 0:
+                print(f"USING BOLT... ({numBolts-1} remaining out of 4)")
+                node.beginsWith = useBolt()
+            return solveAttempt(getWordList(getCompletePrompt(initialPrompt, wordList)))
+        else:
+            suspendedNodes.append(node)
+            print(f"suspending node at {node.pos}...")
+            return False
 
-    return solveAttempt(getWordList(getCompletePrompt(initialPrompt, [], "")))
+    return solveAttempt(getWordList(getCompletePrompt(initialPrompt, [])))
 
 BOXCOORDS = [1920/2-315, 1080/2-15, 1920/2+315, 1080/2+325]
 YADJ = 20   #adjusting cell view area so ocr works
@@ -187,6 +201,7 @@ XSEGMENT, YSEGMENT = (BOXCOORDS[2]-BOXCOORDS[0])/4, (BOXCOORDS[3]-BOXCOORDS[1])/
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 numInputs = 0
 useBoltButton = (776, 457)
+numBolts = 4
 
 #reading and creating cells
 print("READING AND CREATING CELLS")
@@ -245,7 +260,7 @@ while (numInputs > 0):
         for col in range(len(wordGraph[row])):
             node = wordGraph[row][col]
             try:
-                if node.text == '~' and node.getNumNeighbors() > nextTarget.getNumNeighbors() and node not in suspendedNodes:
+                if (node.text == '~' and node.getNumNeighbors() > nextTarget.getNumNeighbors()) and ((node not in suspendedNodes) or (len(suspendedNodes) == numInputs)):
                     nextTarget = node
             except:
                 continue
