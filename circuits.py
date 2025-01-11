@@ -26,6 +26,7 @@ class Node:
         self.pos = (row, col)
         self.top, self.bot, self.left, self.right = None, None, None, None
         self.beginsWith = ""
+        self.avoidWords = []
 
     def getRow(self):
         return self.pos[0]
@@ -34,9 +35,6 @@ class Node:
         return self.pos[1]
 
     def __str__(self):
-        return self.displayNode()
-
-    def displayNode(self):
         ret = (f'node text: {self.text} | ')
         if self.top != None:
             ret += f'top: {self.top.text}, '
@@ -46,6 +44,8 @@ class Node:
             ret += f'left: {self.left.text}, '
         if self.right != None:
             ret += f'right: {self.right.text}'
+        if ret[-2:] == ", ":
+            ret = ret[0:-2]
         return ret
 
     def getNumNeighbors(self):
@@ -72,6 +72,11 @@ class Node:
         # return phrases
         return ", ".join(phrases)
 
+    def addAvoidWords(self, words):
+        for i in words:
+            if i not in self.avoidWords:
+                self.avoidWords.append(i)
+
 #virtual game board: '~' = user inputted space, [y][x] (from top left) for accessing
 wordGraph = [[None, None, None, None],
              [None, None, None, None],
@@ -82,6 +87,7 @@ client = OpenAI(api_key = os.environ.get("API_KEY"))
 # MODEL = "gpt-4o-mini"
 MODEL = "gpt-4o"
 NUMGUESSES = 15
+BRUTEFORCE = False
 
 #white = contains = within range
 #black = outside of range
@@ -109,12 +115,12 @@ def fillIn(node):
     boxYCoords = (BOXCOORDS[1]+node.getCol()*YSEGMENT+YADJ, BOXCOORDS[1]+(node.getCol()+1)*YSEGMENT-YADJ)
     cellSelect = (sum(boxXCoords)/2, sum(boxYCoords)/2)
 
-    def getCompletePrompt(initial, avoidWords):
-        prompt = initial
-        if len(avoidWords) > 0:
-            prompt += (f'. avoid {", ".join(f"'{word}'" for word in avoidWords)}')
+    def getCompletePrompt():
+        prompt = node.getConnections()
+        if len(node.avoidWords) > 0:
+            prompt += (f'. avoid {", ".join(f"'{word}'" for word in node.avoidWords)}')
         if len(node.beginsWith) > 0:
-            prompt += (f". begins with '{node.beginsWith}'")
+            prompt += (f". begins with '{node.beginsWith}...'")
         print(f'prompt: {prompt}')
         return prompt
 
@@ -124,7 +130,7 @@ def fillIn(node):
             messages=[
                 {
                     "role": "system",
-                    "content": f"You are a puzzle-solving bot. Your task is to solve word puzzles by filling blanks with a single word that creates valid, commonly recognized phrases or compound words. Respond with a list of {NUMGUESSES} possible 1-word answers, ordered from most to least likely, using only necessary alphanumerics."
+                    "content": f"You are a puzzle-solving bot. Your task is to solve word puzzles by filling blanks with a single word that creates valid, commonly recognized phrases or compound words. Respond with a list of possible 1-word answers, ordered from most to least likely, using only necessary alphanumerics. The list will contain exactly {NUMGUESSES} words."
                 },
                 {
                     "role": "user",
@@ -166,7 +172,16 @@ def fillIn(node):
         numBolts -= 1
         return (correct(pyperclip.paste()))
 
+    def unsuspendNeighbors(node):
+        for i in [node.top, node.bot, node.left, node.right]:
+            if i != None and i.text == '~':
+                try:
+                    suspendedNodes.pop(suspendedNodes.index(i))
+                except:
+                    continue
+                
     def solveAttempt(wordList):
+        
         for word in wordList:
             moveToClick(cellSelect)
             pyautogui.press('right', presses=len(node.beginsWith))
@@ -175,25 +190,33 @@ def fillIn(node):
 
             img = ImageGrab.grab(bbox=(boxXCoords[0], boxYCoords[0], boxXCoords[1], boxYCoords[1]))
             img = np.array(img)
+            #filtering cell for gold outline = correct answer
             img = colorFilter(img, [226,212,4], 10)
             if len(np.where(img==[255])[0]) != 0:
                 print(f'SUCCESS with {word} ({wordList.index(word)+1}/{len(wordList)})')
                 node.text = word
-                suspendedNodes.clear()
+                try:
+                    suspendedNodes.pop(suspendedNodes.index(node))
+                except:
+                    pass
+                unsuspendNeighbors(node)
                 return True
             else:
                 print(f'FAIL with {word} ({wordList.index(word)+1}/{len(wordList)})')
+        node.addAvoidWords(wordList)
         if node in suspendedNodes:
             if numBolts > 0:
-                print(f"USING BOLT... ({numBolts-1} remaining out of 4)")
+                print(f"USING BOLT... ({numBolts-1}/4 remaining)")
                 node.beginsWith = useBolt()
-            return solveAttempt(getWordList(getCompletePrompt(initialPrompt, wordList)))
+            elif not BRUTEFORCE:
+                raise ValueError("puzzle solving failed. no bolts remaining")
+            return solveAttempt(getWordList(getCompletePrompt()))
         else:
             suspendedNodes.append(node)
             print(f"suspending node at {node.pos}...")
             return False
 
-    return solveAttempt(getWordList(getCompletePrompt(initialPrompt, [])))
+    return solveAttempt(getWordList(getCompletePrompt()))
 
 BOXCOORDS = [1920/2-315, 1080/2-15, 1920/2+315, 1080/2+325]
 YADJ = 20   #adjusting cell view area so ocr works
